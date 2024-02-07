@@ -1,0 +1,87 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let WavesId = "WAVES"
+
+let NodeAddressStr = "3PCrRrwHEjGXFjYtXDsNv78f3Ch3CH3p6V1"
+
+let NextAssetIndexKey = "nextAssetIndex"
+
+func makeAssetIndexKey(assetIdStr: String) = "assetIndex_" + assetIdStr
+
+func makeAssetIdKey(assetIndex: Int) = "assetId_" + assetIndex.toString()
+
+func getNextAssetIndex() = getInteger(NextAssetIndexKey).valueOrElse(0)
+
+func getAssetIndex(assetIdStr: String) = getInteger(makeAssetIndexKey(assetIdStr))
+
+@Callable(i)
+func registerAsset(assetIdStr: String) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (getAssetIndex(assetIdStr) != unit) then throw("Already registered") else
+
+  let assetIndex = getNextAssetIndex()
+  let assetId = if (assetIdStr == WavesId) then base58'' else assetInfo(fromBase58String(assetIdStr)).value().id
+
+  [
+    IntegerEntry(makeAssetIndexKey(assetIdStr), assetIndex),
+    BinaryEntry(makeAssetIdKey(assetIndex), assetId),
+    IntegerEntry(NextAssetIndexKey, assetIndex + 1)
+  ]
+}
+
+@Callable(i)
+func applySettings(swapWavesTo: String, swapWavesDlpTo: String, delegateTo: String) = {
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (i.caller == this) then throw("Self call is prohibited") else
+
+  let callerAddressStr = i.caller.toString()
+  let swapWavesToBytes = fromBase58String(swapWavesTo)
+  let swapWavsDlpToBytes = fromBase58String(swapWavesDlpTo)
+
+  if (swapWavesTo != WavesId && assetInfo(swapWavesToBytes) == unit) then throw("Unknown asset ID: " + swapWavesTo) else
+  if (swapWavesDlpTo != WavesId && assetInfo(swapWavsDlpToBytes) == unit) then throw("Unknown asset ID: " + swapWavesDlpTo) else
+  if (addressFromString(delegateTo) == unit) then throw("Invalid address: " + delegateTo) else
+  if (delegateTo == NodeAddressStr || delegateTo == this.toString()) then throw("Prohibited address: " + delegateTo) else
+
+  let nextAssetIndex = getNextAssetIndex()
+
+  let (firstAssetToRegister, nextAssetIndex1) = if (getAssetIndex(swapWavesTo).isDefined())
+    then ([], nextAssetIndex)
+    else {
+      let assetIndex = nextAssetIndex
+      (
+        [
+          IntegerEntry(makeAssetIndexKey(swapWavesTo), nextAssetIndex), 
+          BinaryEntry(makeAssetIdKey(assetIndex), swapWavesToBytes)
+        ], nextAssetIndex + 1
+      )
+    }
+
+  let (secondAssetToRegister, nextAssetIndex2) = if (getAssetIndex(swapWavesDlpTo).isDefined())
+    then ([], nextAssetIndex1)
+    else {
+      let assetIndex = nextAssetIndex1
+      (
+        [
+          IntegerEntry(makeAssetIndexKey(swapWavesDlpTo), assetIndex), 
+          BinaryEntry(makeAssetIdKey(assetIndex), swapWavsDlpToBytes)
+        ], nextAssetIndex1 + 1
+      )
+    }
+
+  let nextAssetIndexToSave = if (nextAssetIndex2 == nextAssetIndex) 
+    then []
+    else [IntegerEntry(NextAssetIndexKey, nextAssetIndex2)]
+
+  [
+    StringEntry(callerAddressStr + "_swapWavesTo", swapWavesTo),
+    StringEntry(callerAddressStr + "_swapWavesDlpTo", swapWavesDlpTo),
+    StringEntry(callerAddressStr + "_delegateTo", delegateTo)
+  ] ++ firstAssetToRegister ++ secondAssetToRegister ++ nextAssetIndexToSave
+}
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)

@@ -1,0 +1,251 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let MinerFee = 5
+let PayoutEmptyStatus = 0
+let PayoutInitiatedStatus = 1
+let PayoutCompletedStatus = 2
+let BlocksBatchMaxSize = 10
+let RecipientsBatchMaxSize = 100
+let Height = height
+let ChainId = 87
+
+let WavesDlpId = base58'HYogWffUjS8Uw4bYA1Dn3qrGmJerMqkf139aJcHhk8yq'
+
+let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
+let WavesDaoFactoryAddress = Address(base58'3PJVm7xLPabmYohbnvdgGDYHMwnZxF2x18m')
+let SettingsAddress = Address(base58'3P7Jqt9meoym7YhUTEXe3nRYXVe8kuCuMSr')
+let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
+let MaintainerAddress = Address(base58'3PN2JRxJxjjZo1YJGyQrxdhoEbijc24BMY3')
+let PuzzleTeamAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
+
+let WavesId = "WAVES"
+
+let LastPayoutKey = "lastPayout"
+let MassTransferFeesKey = "massTransferFees"
+
+func makePayoutDataKey(payoutId: Int) = "payoutData_" + payoutId.toString()
+
+func makePayoutStatusKey(payoutId: Int) = "payoutStatus_" + payoutId.toString()
+
+func makePayoutAdditionalRewardsKey(payoutId: Int) = "payoutAdditionalRewards_" + payoutId.toString()
+
+func getLastPayout() = this.getIntegerValue(LastPayoutKey)
+
+func getPayoutData(payoutId: Int) = {
+    let payoutString = getStringValue(makePayoutDataKey(payoutId))
+    let payoutDataList = payoutString.split("_")
+    let startHeight = payoutDataList[0].parseIntValue()
+    let endHeight = payoutDataList[1].parseIntValue()
+    let wavesAmount = payoutDataList[2].parseIntValue()
+    let wavesDaoLpAmount = payoutDataList[3].parseIntValue()
+    (startHeight, endHeight, wavesAmount, wavesDaoLpAmount)
+}
+
+func getPayoutStatus(payoutId: Int) = getInteger(makePayoutStatusKey(payoutId)).valueOrElse(PayoutEmptyStatus)
+
+func getPayoutAdditionalRewards(payoutId: Int) = getInteger(makePayoutAdditionalRewardsKey(payoutId)).valueOrElse(0)
+
+@Callable(i)
+func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, wavesAmount: Int, wavesDaoLpAmount: Int) = {
+    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.payments.size() != 0) then throw("Payments are prohibited") else
+
+    let lastPayout = getLastPayout()
+    if (payoutId != lastPayout + 1) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + (lastPayout + 1).toString()) else
+
+    let lastPayoutStatus = getPayoutStatus(lastPayout)
+    if (lastPayoutStatus != PayoutCompletedStatus) then throw("Last payout: " + lastPayout.toString() + " was not completed") else
+
+    let (lastStartHeight, lastEndHeight, lastWavesAmount, lastWavesDaoLpAmount) = getPayoutData(lastPayout)
+    if (startHeight != lastEndHeight + 1) then throw("Wrong startHeight: " + startHeight.toString() + ", should be: " + (lastEndHeight + 1).toString()) else
+    if (endHeight < startHeight) then throw("endHeight: " + endHeight.toString() + " less than startHeight: " + startHeight.toString()) else
+
+    if (wavesAmount <= 0) then throw("Wrong wavesAmount: " + wavesAmount.toString() + ", should be positive") else
+
+    if (wavesDaoLpAmount < 0) then throw("Wrong wavesDaoLpAmount: " + wavesDaoLpAmount.toString() + ", should be positive or zero") else
+
+    let availableWavesDaoLpToClaim = WavesDaoFactoryAddress.getInteger("%s%s__available__" + this.toString()).valueOrElse(0)
+    let wavesDaoNextBlockToProcess = WavesDaoFactoryAddress.getIntegerValue("%s__nextBlockToProcess")
+    strict wavesDlpClaim = if (availableWavesDaoLpToClaim > 0 && wavesDaoNextBlockToProcess + BlocksBatchMaxSize >= Height) then invoke(WavesDaoFactoryAddress, "claimLP", nil, nil) else unit
+
+    let currentAdditionalRewards = getPayoutAdditionalRewards(payoutId)
+    let totalWavesAmount = currentAdditionalRewards + wavesAmount
+
+    let minerWavesFee = fraction(totalWavesAmount, MinerFee, 100)
+    let maintainerWavesFee = minerWavesFee / 2
+    let puzzleTeamWavesFee = minerWavesFee - maintainerWavesFee
+    let lessorsWavesAmount = totalWavesAmount - maintainerWavesFee - puzzleTeamWavesFee
+    let minerWavesDaoLpFee = fraction(wavesDaoLpAmount, MinerFee, 100)
+    let maintainerWavesDaoLpFee = minerWavesDaoLpFee / 2
+    let puzzleTeamWavesDaoLpFee = minerWavesDaoLpFee - maintainerWavesDaoLpFee
+    let lessorsWavesDaoLpAmount = wavesDaoLpAmount - maintainerWavesDaoLpFee - puzzleTeamWavesDaoLpFee
+
+    let newPayoutData = makeString([
+        startHeight.toString(), 
+        endHeight.toString(),
+        lessorsWavesAmount.toString(), 
+        lessorsWavesDaoLpAmount.toString()], "_")
+
+    [
+        ScriptTransfer(MaintainerAddress, maintainerWavesFee, unit),
+        ScriptTransfer(MaintainerAddress, maintainerWavesDaoLpFee, WavesDlpId),
+        ScriptTransfer(PuzzleTeamAddress, puzzleTeamWavesFee, unit),
+        ScriptTransfer(PuzzleTeamAddress, puzzleTeamWavesDaoLpFee, WavesDlpId),
+        IntegerEntry(LastPayoutKey, payoutId),
+        StringEntry(makePayoutDataKey(payoutId), newPayoutData),
+        IntegerEntry(makePayoutStatusKey(payoutId), PayoutInitiatedStatus)
+    ]
+}
+
+@Callable(i)
+func swap(payoutId: Int, swapFrom: String, amountIn: Int, route: String, minToReceive: Int) = {
+    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.payments.size() != 0) then throw("Payments are prohibited") else
+
+    let lastPayout = getLastPayout()
+    if (lastPayout != payoutId) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + lastPayout.toString()) else
+
+    let payoutStatus = getPayoutStatus(payoutId)
+    if (payoutStatus != PayoutInitiatedStatus) then throw("Wrong payout status: " + payoutStatus.toString() + ", should be 1") else
+
+    let (balanceInBeforeSwap, swapFromId) = if (swapFrom == WavesId) 
+        then (wavesBalance(this).available, unit)
+        else {
+            let assetId = fromBase58String(swapFrom)
+            (assetBalance(this, assetId), assetId)
+        }
+
+    strict swapInvoke = invoke(PuzzleAggregatorAddress, "swapWithReferral", [route, minToReceive, "puzzlenode"], [AttachedPayment(swapFromId, amountIn)])
+
+    let balanceInAfterSwap = if (swapFrom == WavesId) 
+        then wavesBalance(this).available
+        else assetBalance(this, swapFromId.value())
+
+    if (balanceInAfterSwap != balanceInBeforeSwap - amountIn) then throw("Rollback aggregator error") else
+    nil
+}
+
+@Callable(i)
+func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List[Int], assets: List[Int], attachment: String) = {    
+    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.payments.size() != 0) then throw("Payments are prohibited") else
+
+    let lastPayout = getLastPayout()
+    if (lastPayout != payoutId) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + lastPayout.toString()) else
+
+    let payoutStatus = getPayoutStatus(payoutId)
+    if (payoutStatus != PayoutInitiatedStatus) then throw("Wrong payout status: " + payoutStatus.toString() + ", should be 1") else
+
+    let recipientsSize = recipients.size()
+    let amountsSize = amounts.size()
+    let assetsSize = assets.size()
+    if (recipientsSize != amountsSize || recipientsSize != assetsSize) then throw("Wrong recipients size: " + recipientsSize.toString() + ", amounts size: " + amountsSize.toString() + ", assets size: " + assetsSize.toString()) else
+    if (recipientsSize == 0) then throw("Recipients list should not be empty") else
+    if (recipientsSize > RecipientsBatchMaxSize) then throw("Should be not greater than " + RecipientsBatchMaxSize.toString() + " recipients, current: " + recipientsSize.toString()) else
+
+    let magicByte = 1.toBytes().drop(7)
+    let chainIdByte = ChainId.toBytes().drop(7)
+    let addressPrefix = magicByte + chainIdByte
+
+    func scriptTransfersFold(accum: List[ScriptTransfer], index: Int) = {
+        if (index >= recipientsSize) then accum else
+
+        let publicKeyHash = recipients[index]
+        let addressData = addressPrefix + publicKeyHash
+        let addressChecksum = keccak256(blake2b256(addressData)).take(4)
+        let recipient = Address(addressData + addressChecksum)
+
+        let amount = amounts[index]
+        let assetIndex = assets[index]
+        let assetId = SettingsAddress.getBinaryValue("assetId_" + assetIndex.toString())
+        let asset = if (assetId == base58'') then unit else assetId
+        accum :+ ScriptTransfer(recipient, amount, asset)
+    }
+    
+    let indexes = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+        50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+        60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+        70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+        80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+        90, 91, 92, 93, 94, 95, 96, 97, 98, 99
+    ]
+
+    FOLD<100>(indexes, [], scriptTransfersFold)
+}
+
+@Callable(i)
+func finalizePayout(payoutId: Int) = {
+    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.payments.size() != 1) then throw("At least one payment should be attached") else
+    if (i.payments[0].assetId != unit) then throw("Only waves can be attached") else
+
+    let lastPayout = getLastPayout()
+    if (lastPayout != payoutId) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + lastPayout.toString()) else
+
+    let payoutStatus = getPayoutStatus(lastPayout)
+    if (payoutStatus != PayoutInitiatedStatus) then throw("Wrong payout status: " + payoutStatus.toString() + ", should be: 1") else
+
+    [
+        IntegerEntry(makePayoutStatusKey(lastPayout), PayoutCompletedStatus)
+    ]
+}
+
+@Callable(i)
+func addAdditionalRewards() = {
+    if (i.payments.size() != 1) then throw("At least one payment should be attached") else
+    if (i.payments[0].assetId != unit) then throw("Only waves can be attached") else
+
+    let lastPayout = getLastPayout()
+    let lastPayoutStatus = getPayoutStatus(lastPayout)
+    if (lastPayoutStatus != PayoutCompletedStatus) then throw("Last payout: " + lastPayout.toString() + " was not completed") else
+
+    let nextPayoutId = lastPayout + 1
+    let currentAdditionalRewards = getPayoutAdditionalRewards(nextPayoutId)
+    let newAdditionalRewards = currentAdditionalRewards + i.payments[0].amount
+
+    [
+        IntegerEntry(makePayoutAdditionalRewardsKey(nextPayoutId), newAdditionalRewards)
+    ]
+}
+
+@Callable(i)
+func addMassTransferFees() = {
+    if (i.payments.size() != 1) then throw("At least one payment should be attached") else
+    if (i.payments[0].assetId != unit) then throw("Only waves can be attached") else
+
+    let currentMassTransferFees = getInteger(MassTransferFeesKey).valueOrElse(0)
+    let newMassTransferFees = currentMassTransferFees + i.payments[0].amount
+
+    [
+        IntegerEntry(MassTransferFeesKey, newMassTransferFees)
+    ]
+}
+
+@Callable(i)
+func withdrawMassTransferFees() = {
+    if (i.caller != MaintainerAddress) then throw("Access denied") else
+    if (i.payments.size() != 0) then throw("Payments are prohibited") else
+
+    let currentMassTransferFees = getInteger(MassTransferFeesKey).valueOrElse(0)
+    if (currentMassTransferFees == 0) then throw("Nothing to withdraw") else
+
+    [
+        IntegerEntry(MassTransferFeesKey, 0),
+        ScriptTransfer(MaintainerAddress, currentMassTransferFees, unit)
+    ]
+}
+
+@Verifier(tx)
+func verify () = {
+    match tx {
+        case massTx: MassTransferTransaction => sigVerify_128Kb(massTx.bodyBytes, massTx.proofs[0], base58'2cbCaPrCUFJSpoBfd1vzYB6ZVGRgjRky7u7bAqf2zjgE')
+        case _ => sigVerify_128Kb(tx.bodyBytes, tx.proofs[0], base58'4eCgF1voXpsudbxN4FRQG2NCBP5QVeyJpNsfqMDQvPHh')
+    }
+}
