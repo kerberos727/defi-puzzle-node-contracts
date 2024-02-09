@@ -123,7 +123,8 @@ func swap(payoutId: Int, swapFrom: String, amountIn: Int, route: String, minToRe
         then wavesBalance(this).available
         else assetBalance(this, swapFromId.value())
 
-    if (balanceInAfterSwap != balanceInBeforeSwap - amountIn) then throw("Rollback aggregator error") else
+    let refund = balanceInAfterSwap - (balanceInBeforeSwap - amountIn)
+    if (refund > 10) then throw("Rollback aggregator refund: " + refund.toString()) else
     nil
 }
 
