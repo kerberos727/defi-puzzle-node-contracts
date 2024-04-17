@@ -1,0 +1,140 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let WavesId = "WAVES"
+
+let NodeAddressStr = "3PCrRrwHEjGXFjYtXDsNv78f3Ch3CH3p6V1"
+
+let InputsQuantityKey = "inputsQuantity"
+
+let OutputsQuantityKey = "outputsQuantity"
+
+let AssetsQuantityKey = "assetsQuantity"
+
+let Arr10 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+func makeInputAssetIndexKey(assetIdStr: String) = "inputAssetIndex_" + assetIdStr
+
+func makeOutputAssetIndexKey(assetIdStr: String) = "outputAssetIndex_" + assetIdStr
+
+func makeAssetIndexKey(assetIdStr: String) = "assetIndex_" + assetIdStr
+
+func makeAssetIdKey(assetIndex: Int) = "assetId_" + assetIndex.toString()
+
+func getInputAssetIndex(assetIdStr: String) = getInteger(makeInputAssetIndexKey(assetIdStr))
+
+func getOutputAssetIndex(assetIdStr: String) = getInteger(makeOutputAssetIndexKey(assetIdStr))
+
+func getAssetIndex(assetIdStr: String) = getInteger(makeAssetIndexKey(assetIdStr))
+
+func getInputsQuantity() = getInteger(InputsQuantityKey).valueOrElse(0)
+
+func getOutputsQuantity() = getInteger(OutputsQuantityKey).valueOrElse(0)
+
+func getAssetsQuantity() = getInteger(AssetsQuantityKey).valueOrElse(0)
+
+@Callable(i)
+func registerInputs(inputs: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let inputsSize = inputs.size()
+  let assetsQuanity = getAssetsQuantity()
+  let inputsQuantity = getInputsQuantity()
+
+  func inputsFold(accum: (List[IntegerEntry|BinaryEntry], Int), index: Int) = {
+    if (index >= inputsSize) then accum else
+
+    let input = inputs[index]
+    if (getInputAssetIndex(input) != unit) then throw("Already registered: " + input) else
+
+    let assetId = if (input == WavesId) then base58'' else assetInfo(fromBase58String(input)).value().id
+    let assetInputIndex = inputsQuantity + index
+    let (assetIdRegistration, incrementAssetId) = if (getOutputAssetIndex(input) == unit) 
+      then ([BinaryEntry(makeAssetIdKey(accum._2), assetId), IntegerEntry(makeAssetIndexKey(input), accum._2)], 1) 
+      else ([], 0)
+
+    (
+      accum._1 :+ IntegerEntry(makeInputAssetIndexKey(input), assetInputIndex) ++ assetIdRegistration,
+      accum._2 + incrementAssetId
+    )
+  }
+
+  let (inputsRegistration, newAssetsQuantity) = FOLD<10>(Arr10, ([], assetsQuanity), inputsFold)
+
+  inputsRegistration ++ [
+    IntegerEntry(AssetsQuantityKey, newAssetsQuantity),
+    IntegerEntry(InputsQuantityKey, inputsQuantity + inputsSize)
+  ]
+}
+
+@Callable(i)
+func registerOutputs(outputs: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let outputsSize = outputs.size()
+  let assetsQuantity = getAssetsQuantity()
+  let outputsQuantity = getOutputsQuantity()
+
+  func outputsFold(accum: (List[IntegerEntry|BinaryEntry], Int), index: Int) = {
+    if (index >= outputsSize) then accum else
+
+    let output = outputs[index]
+    if (getOutputAssetIndex(output) != unit) then throw("Already registered: " + output) else
+
+    let assetId = if (output == WavesId) then base58'' else assetInfo(fromBase58String(output)).value().id
+    let assetOutputIndex = outputsQuantity + index
+    let (assetIdRegistration, incrementAssetId) = if (getInputAssetIndex(output) == unit) 
+      then ([BinaryEntry(makeAssetIdKey(accum._2), assetId), IntegerEntry(makeAssetIndexKey(output), accum._2)], 1) 
+      else ([], 0)
+
+    (
+      accum._1 :+ IntegerEntry(makeOutputAssetIndexKey(output), assetOutputIndex) ++ assetIdRegistration,
+      accum._2 + incrementAssetId
+    )
+  }
+
+  let (outputsRegistration, newAssetsQuantity) = FOLD<10>(Arr10, ([], assetsQuantity), outputsFold)
+
+  outputsRegistration ++ [
+    IntegerEntry(AssetsQuantityKey, newAssetsQuantity),
+    IntegerEntry(OutputsQuantityKey, outputsQuantity + outputsSize)
+  ]
+}
+
+@Callable(i)
+func applySettings(inputs: List[String], outputs: List[String], delegateTo: String) = {
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (i.caller == this) then throw("Self call is prohibited") else
+
+  let callerAddressStr = i.caller.toString()
+
+  let inputsQuantity = getIntegerValue(InputsQuantityKey)
+  let inputsSize = inputs.size()
+  let outputsSize = outputs.size()
+  if (inputsSize != outputsSize || inputsSize != inputsQuantity) then throw("Wrong size of inputs or outputs") else
+
+  if (addressFromString(delegateTo) == unit) then throw("Invalid address: " + delegateTo) else
+  if (delegateTo == NodeAddressStr || delegateTo == this.toString()) then throw("Prohibited address: " + delegateTo) else
+
+  func mappingsFold(accum: List[StringEntry|IntegerEntry|BinaryEntry], index: Int) = {
+    if (index >= inputsSize) then accum else
+
+    let input = inputs[index]
+    if (getInputAssetIndex(input) == unit) then throw("Unknown input: " + input) else
+
+    let output = outputs[index]
+    if (getOutputAssetIndex(output) == unit) then throw("Unknown output: " + output) else
+
+    accum :+ StringEntry(callerAddressStr + "_" + input, output)
+  }
+
+  let mappings = FOLD<10>(Arr10, [], mappingsFold)
+
+  mappings :+ StringEntry(callerAddressStr + "_delegateTo", delegateTo)
+}
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)

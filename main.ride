@@ -11,11 +11,11 @@ let RecipientsBatchMaxSize = 100
 let Height = height
 let ChainId = 87
 
-let WavesDlpId = base58'HYogWffUjS8Uw4bYA1Dn3qrGmJerMqkf139aJcHhk8yq'
+let Arr10 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
 let WavesDaoFactoryAddress = Address(base58'3PJVm7xLPabmYohbnvdgGDYHMwnZxF2x18m')
-let SettingsAddress = Address(base58'3P7Jqt9meoym7YhUTEXe3nRYXVe8kuCuMSr')
+let SettingsAddress = Address(base58'3PFUGQBAF7w9rYLvLyNZzRSq1x6stxsmV1D')
 let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
 let MaintainerAddress = Address(base58'3PN2JRxJxjjZo1YJGyQrxdhoEbijc24BMY3')
 let PuzzleTeamAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
@@ -23,6 +23,7 @@ let PuzzleTeamAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
 let WavesId = "WAVES"
 
 let LastPayoutKey = "lastPayout"
+
 let MassTransferFeesKey = "massTransferFees"
 
 func makePayoutDataKey(payoutId: Int) = "payoutData_" + payoutId.toString()
@@ -38,9 +39,7 @@ func getPayoutData(payoutId: Int) = {
     let payoutDataList = payoutString.split("_")
     let startHeight = payoutDataList[0].parseIntValue()
     let endHeight = payoutDataList[1].parseIntValue()
-    let wavesAmount = payoutDataList[2].parseIntValue()
-    let wavesDaoLpAmount = payoutDataList[3].parseIntValue()
-    (startHeight, endHeight, wavesAmount, wavesDaoLpAmount)
+    (startHeight, endHeight)
 }
 
 func getPayoutStatus(payoutId: Int) = getInteger(makePayoutStatusKey(payoutId)).valueOrElse(PayoutEmptyStatus)
@@ -48,7 +47,7 @@ func getPayoutStatus(payoutId: Int) = getInteger(makePayoutStatusKey(payoutId)).
 func getPayoutAdditionalRewards(payoutId: Int) = getInteger(makePayoutAdditionalRewardsKey(payoutId)).valueOrElse(0)
 
 @Callable(i)
-func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, wavesAmount: Int, wavesDaoLpAmount: Int) = {
+func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: List[Int], assets: List[String]) = {
     if (i.caller != CallerAddress) then throw("Access denied") else
     if (i.payments.size() != 0) then throw("Payments are prohibited") else
 
@@ -58,41 +57,51 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, wavesAmount
     let lastPayoutStatus = getPayoutStatus(lastPayout)
     if (lastPayoutStatus != PayoutCompletedStatus) then throw("Last payout: " + lastPayout.toString() + " was not completed") else
 
-    let (lastStartHeight, lastEndHeight, lastWavesAmount, lastWavesDaoLpAmount) = getPayoutData(lastPayout)
+    let (lastStartHeight, lastEndHeight) = getPayoutData(lastPayout)
     if (startHeight != lastEndHeight + 1) then throw("Wrong startHeight: " + startHeight.toString() + ", should be: " + (lastEndHeight + 1).toString()) else
     if (endHeight < startHeight) then throw("endHeight: " + endHeight.toString() + " less than startHeight: " + startHeight.toString()) else
 
-    if (wavesAmount <= 0) then throw("Wrong wavesAmount: " + wavesAmount.toString() + ", should be positive") else
-
-    if (wavesDaoLpAmount < 0) then throw("Wrong wavesDaoLpAmount: " + wavesDaoLpAmount.toString() + ", should be positive or zero") else
+    let inputsQuantity = SettingsAddress.getIntegerValue("inputsQuantity")
+    let amountsSize = amounts.size()
+    let assetsSize = assets.size()
+    if (amountsSize != assetsSize || amountsSize != inputsQuantity) then throw("Wrong size of amounts or assets") else
 
     let availableWavesDaoLpToClaim = WavesDaoFactoryAddress.getInteger("%s%s__available__" + this.toString()).valueOrElse(0)
     let wavesDaoNextBlockToProcess = WavesDaoFactoryAddress.getIntegerValue("%s__nextBlockToProcess")
-    strict wavesDlpClaim = if (availableWavesDaoLpToClaim > 0 && wavesDaoNextBlockToProcess + BlocksBatchMaxSize >= Height) then invoke(WavesDaoFactoryAddress, "claimLP", nil, nil) else unit
+    strict wavesDlpClaim = if (availableWavesDaoLpToClaim > 0 && wavesDaoNextBlockToProcess + BlocksBatchMaxSize >= Height) 
+        then invoke(WavesDaoFactoryAddress, "claimLP", nil, nil) 
+        else unit
 
     let currentAdditionalRewards = getPayoutAdditionalRewards(payoutId)
-    let totalWavesAmount = currentAdditionalRewards + wavesAmount
 
-    let minerWavesFee = fraction(totalWavesAmount, MinerFee, 100)
-    let maintainerWavesFee = minerWavesFee / 2
-    let puzzleTeamWavesFee = minerWavesFee - maintainerWavesFee
-    let lessorsWavesAmount = totalWavesAmount - maintainerWavesFee - puzzleTeamWavesFee
-    let minerWavesDaoLpFee = fraction(wavesDaoLpAmount, MinerFee, 100)
-    let maintainerWavesDaoLpFee = minerWavesDaoLpFee / 2
-    let puzzleTeamWavesDaoLpFee = minerWavesDaoLpFee - maintainerWavesDaoLpFee
-    let lessorsWavesDaoLpAmount = wavesDaoLpAmount - maintainerWavesDaoLpFee - puzzleTeamWavesDaoLpFee
+    func assetsFold(accum: (List[ScriptTransfer], List[String]), index: Int) = {
+        if (index >= assetsSize) then accum else
 
-    let newPayoutData = makeString([
-        startHeight.toString(), 
-        endHeight.toString(),
-        lessorsWavesAmount.toString(), 
-        lessorsWavesDaoLpAmount.toString()], "_")
+        let assetStr = assets[index]
+        if (SettingsAddress.getInteger("inputAssetIndex_" + assetStr) == unit) then throw("Unknown input: " + assetStr) else
 
-    [
-        ScriptTransfer(MaintainerAddress, maintainerWavesFee, unit),
-        ScriptTransfer(MaintainerAddress, maintainerWavesDaoLpFee, WavesDlpId),
-        ScriptTransfer(PuzzleTeamAddress, puzzleTeamWavesFee, unit),
-        ScriptTransfer(PuzzleTeamAddress, puzzleTeamWavesDaoLpFee, WavesDlpId),
+        let (asset, amount) = if (assetStr == WavesId) 
+            then (unit, amounts[index] + currentAdditionalRewards) 
+            else (fromBase58String(assetStr), amounts[index])
+
+        if (amount < 0) then throw("Wrong asset amount: " + amount.toString() + ", should be positive or zero") else
+
+        let minerFee = fraction(amount, MinerFee, 100)
+        let maintainerFee = minerFee / 2
+        let puzzleTeamFee = minerFee - maintainerFee
+        let lessorsAmount = amount - maintainerFee - puzzleTeamFee
+
+        (
+            accum._1 :+ ScriptTransfer(MaintainerAddress, maintainerFee, asset) :+ ScriptTransfer(PuzzleTeamAddress, puzzleTeamFee, asset),
+            accum._2 :+ lessorsAmount.toString()
+        )
+    }
+
+    let (transfers, amountKeys) = FOLD<10>(Arr10, ([], []), assetsFold)
+
+    let newPayoutData = makeString([startHeight.toString(), endHeight.toString()] ++ amountKeys, "_")
+
+    transfers ++ [
         IntegerEntry(LastPayoutKey, payoutId),
         StringEntry(makePayoutDataKey(payoutId), newPayoutData),
         IntegerEntry(makePayoutStatusKey(payoutId), PayoutInitiatedStatus)
@@ -184,8 +193,6 @@ func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List
 @Callable(i)
 func finalizePayout(payoutId: Int) = {
     if (i.caller != CallerAddress) then throw("Access denied") else
-    if (i.payments.size() != 1) then throw("At least one payment should be attached") else
-    if (i.payments[0].assetId != unit) then throw("Only waves can be attached") else
 
     let lastPayout = getLastPayout()
     if (lastPayout != payoutId) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + lastPayout.toString()) else
