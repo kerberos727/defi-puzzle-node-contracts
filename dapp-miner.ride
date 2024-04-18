@@ -1,0 +1,44 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let MinerFee = 25
+let BlocksBatchMaxSize = 10
+
+let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
+let WavesDaoFactoryAddress = Address(base58'3PJVm7xLPabmYohbnvdgGDYHMwnZxF2x18m')
+let MaintainerAddress = Address(base58'3PN2JRxJxjjZo1YJGyQrxdhoEbijc24BMY3')
+let PuzzleBuybackAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
+
+let WavesDlpId = base58'HYogWffUjS8Uw4bYA1Dn3qrGmJerMqkf139aJcHhk8yq'
+
+@Callable(i)
+func distributeMinerRewards() = {
+  if (i.caller != CallerAddress) then throw("Admin only") else
+
+  let availableWavesDaoLpToClaim = WavesDaoFactoryAddress.getInteger("%s%s__available__" + this.toString()).valueOrElse(0)
+  let wavesDaoNextBlockToProcess = WavesDaoFactoryAddress.getIntegerValue("%s__nextBlockToProcess")
+  strict wavesDlpClaim = if (availableWavesDaoLpToClaim > 0 && wavesDaoNextBlockToProcess + BlocksBatchMaxSize >= height) 
+    then invoke(WavesDaoFactoryAddress, "claimLP", nil, nil) 
+    else unit
+
+  let wavesAvailableBalance = this.wavesBalance().available
+  let wavesFee = fraction(wavesAvailableBalance, MinerFee, 1000)
+  let wavesRewards = wavesAvailableBalance - wavesFee
+
+  let wavesDlpBalance = this.assetBalance(WavesDlpId)
+  let wavesDlpFee = fraction(wavesDlpBalance, MinerFee, 1000)
+  let wavesDlpRewards = wavesDlpBalance - wavesDlpFee
+
+  if (wavesAvailableBalance <= 0 && wavesDlpBalance <= 0) then throw("Nothing to distribute") else
+
+  [
+    ScriptTransfer(MaintainerAddress, wavesFee, unit),
+    ScriptTransfer(MaintainerAddress, wavesDlpFee, WavesDlpId),
+    ScriptTransfer(PuzzleBuybackAddress, wavesRewards, unit),
+    ScriptTransfer(PuzzleBuybackAddress, wavesDlpRewards, WavesDlpId)
+  ]
+}
+
+@Verifier(tx)
+func verify () = sigVerify(tx.bodyBytes, tx.proofs[0], base58'7x2dBFJz4jKwo1m84mH1pd4JBzwkqkj2fDcAaHa2eBEZ')

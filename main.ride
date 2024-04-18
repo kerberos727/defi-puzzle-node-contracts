@@ -18,7 +18,7 @@ let WavesDaoFactoryAddress = Address(base58'3PJVm7xLPabmYohbnvdgGDYHMwnZxF2x18m'
 let SettingsAddress = Address(base58'3PFUGQBAF7w9rYLvLyNZzRSq1x6stxsmV1D')
 let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
 let MaintainerAddress = Address(base58'3PN2JRxJxjjZo1YJGyQrxdhoEbijc24BMY3')
-let PuzzleTeamAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
+let PuzzleBuybackAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
 
 let WavesId = "WAVES"
 
@@ -92,7 +92,7 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: Li
         let lessorsAmount = amount - maintainerFee - puzzleTeamFee
 
         (
-            accum._1 :+ ScriptTransfer(MaintainerAddress, maintainerFee, asset) :+ ScriptTransfer(PuzzleTeamAddress, puzzleTeamFee, asset),
+            accum._1 :+ ScriptTransfer(MaintainerAddress, maintainerFee, asset) :+ ScriptTransfer(PuzzleBuybackAddress, puzzleTeamFee, asset),
             accum._2 :+ lessorsAmount.toString()
         )
     }
