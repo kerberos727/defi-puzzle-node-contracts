@@ -1,0 +1,41 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let WavesId = "WAVES"
+let TotalBoughtPuzzleKey = "totalBoughtPuzzle"
+
+let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
+let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
+let PuzzleStakingAddress = Address(base58'3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS')
+
+let PuzzleId = base58'HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS'
+
+@Callable(i)
+func buybackPuzzleAndTopUpRewards(asset: String, route: String, minToReceive: Int) = {
+  if (i.caller != CallerAddress) then throw("Admin only") else
+  let (assetId, balance) = if (asset == WavesId) 
+    then (unit, this.wavesBalance().available)
+    else {
+      let currentAssetId = fromBase58String(asset)
+      let currentAssetBalance = this.assetBalance(currentAssetId)
+      (currentAssetId, currentAssetBalance)
+    }
+
+  if (balance <= 0) then throw("Empty balance of " + asset) else
+
+  strict swapInvoke = invoke(PuzzleAggregatorAddress, "swapWithReferral", [route, minToReceive, "puzzlenode"], [AttachedPayment(assetId, balance)])
+
+  let boughtPuzzle = this.assetBalance(PuzzleId)
+  if (boughtPuzzle <= 0) then throw("Puzzle was not bought, asset: " + asset + ", route: " + route) else
+  
+  strict topUpInvoke = invoke(PuzzleStakingAddress, "topUpReward", nil, [AttachedPayment(PuzzleId, boughtPuzzle)])
+
+  let totalBoughtPuzzle = getInteger(TotalBoughtPuzzleKey).valueOrElse(0) + boughtPuzzle
+  let statsKey = makeString(["stats", i.transactionId.toBase58String(), height.toString(), lastBlock.timestamp.toString(), balance.toString(), asset], "_")
+
+  [
+    IntegerEntry(statsKey, boughtPuzzle),
+    IntegerEntry(TotalBoughtPuzzleKey, totalBoughtPuzzle)
+  ]
+}
