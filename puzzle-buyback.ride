@@ -3,18 +3,66 @@
 {-# CONTENT_TYPE DAPP #-}
 
 let WavesId = "WAVES"
+let Height = height
+
+let CallerAddressKey = "setup_callerAddress"
+let PuzzleAggregatorAddressKey = "setup_puzzleAggregatorAddress"
+let PuzzleStakingAddressKey = "setup_puzzleStakingAddress"
+let PuzzleIdKey = "setup_puzzleId"
+let BuybackIterationsKey = "setup_buybackIterations"
+let BuybackDelayKey = "setup_buybackDelay"
 let TotalBoughtPuzzleKey = "totalBoughtPuzzle"
 
-let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
-let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
-let PuzzleStakingAddress = Address(base58'3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS')
+let CallerAddress = addressFromStringValue(this.getStringValue(CallerAddressKey))
+let PuzzleAggregatorAddress = addressFromStringValue(this.getStringValue(PuzzleAggregatorAddressKey))
+let PuzzleStakingAddress = addressFromStringValue(this.getStringValue(PuzzleStakingAddressKey))
+let PuzzleId = this.getBinaryValue(PuzzleIdKey)
+let BuybackIterations = this.getIntegerValue(BuybackIterationsKey)
+let BuybackDelay = this.getIntegerValue(BuybackDelayKey)
+let BuybackEpochLength = BuybackIterations * BuybackDelay
 
-let PuzzleId = base58'HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS'
+func makeLastBuybackHeightKey(asset: String) = "lastBuybackHeight_" + asset
+func makeBuybackInputKey(asset: String, epochHeight: Int) = "buybackInput_" + asset + "_" + epochHeight.toString()
+func makeStatsKey(i: Invocation, buybackInput: Int, asset: String) = 
+  makeString(["stats", i.transactionId.toBase58String(), Height.toString(), lastBlock.timestamp.toString(), buybackInput.toString(), asset], "_")
+
+func getLastBuybackHeight(asset: String) = this.getInteger(makeLastBuybackHeightKey(asset)).valueOrElse(0)
+func getBuybackInput(asset: String, epochHeight: Int) = this.getInteger(makeBuybackInputKey(asset, epochHeight))
 
 @Callable(i)
-func buybackPuzzleAndTopUpRewards(asset: String, route: String, minToReceive: Int) = {
-  if (i.caller != CallerAddress) then throw("Admin only") else
-  let (assetId, balance) = if (asset == WavesId) 
+func setup(
+  callerAddress: String,
+  puzzleAggregatorAddress: String,
+  puzzleStakingAddress: String,
+  puzzleId: String,
+  buybackIterations: Int,
+  buybackDelay: Int) = {
+  if (i.caller != this) then throw("Owner only") else
+  if (addressFromString(callerAddress) == unit) then throw("Invalid callerAddress: " + callerAddress) else
+  if (addressFromString(puzzleAggregatorAddress) == unit) then throw("Invalid puzzleAggregatorAddress: " + puzzleAggregatorAddress) else
+  if (addressFromString(puzzleStakingAddress) == unit) then throw("Invalid puzzleStakingAddress: " + puzzleStakingAddress) else
+  if (assetInfo(fromBase58String(puzzleId)) == unit) then throw("Unknown puzzleId: " + puzzleId) else
+  if (buybackIterations <= 0) then throw("buybackIterations should be positive, current value: " + buybackIterations.toString()) else
+  if (buybackDelay <= 0) then throw("buybackDelay should be positive, current value: " + buybackDelay.toString()) else
+
+  [
+    StringEntry(CallerAddressKey, callerAddress),
+    StringEntry(PuzzleAggregatorAddressKey, puzzleAggregatorAddress),
+    StringEntry(PuzzleStakingAddressKey, puzzleStakingAddress),
+    BinaryEntry(PuzzleIdKey, fromBase58String(puzzleId)),
+    IntegerEntry(BuybackIterationsKey, buybackIterations),
+    IntegerEntry(BuybackDelayKey, buybackDelay)
+  ]
+}
+
+@Callable(i)
+func buybackPuzzleAndTopUpRewards(asset: String, amount: Int, route: String, minToReceive: Int) = {
+  if (i.caller != CallerAddress) then throw("Whitelisted only") else
+
+  let lastBuybackHeight = getLastBuybackHeight(asset)
+  if (lastBuybackHeight + BuybackDelay > Height) then throw("Not yet") else
+
+  let (assetId, balance) = if (asset == WavesId)
     then (unit, this.wavesBalance().available)
     else {
       let currentAssetId = fromBase58String(asset)
@@ -22,20 +70,27 @@ func buybackPuzzleAndTopUpRewards(asset: String, route: String, minToReceive: In
       (currentAssetId, currentAssetBalance)
     }
 
-  if (balance <= 0) then throw("Empty balance of " + asset) else
+  let epochHeight = Height / BuybackEpochLength * BuybackEpochLength
+  let epochBuybackInput = getBuybackInput(asset, epochHeight).valueOrElse(balance / BuybackIterations)
+  if (amount > balance || amount <= 0 || amount > epochBuybackInput) then throw("Invalid amount: " + amount.toString()) else
 
-  strict swapInvoke = invoke(PuzzleAggregatorAddress, "swapWithReferral", [route, minToReceive, "puzzlenode"], [AttachedPayment(assetId, balance)])
+  strict swapInvoke = invoke(PuzzleAggregatorAddress, "swapWithReferral", [route, minToReceive, "puzzlenode"], [AttachedPayment(assetId, amount)])
 
   let boughtPuzzle = this.assetBalance(PuzzleId)
   if (boughtPuzzle <= 0) then throw("Puzzle was not bought, asset: " + asset + ", route: " + route) else
   
   strict topUpInvoke = invoke(PuzzleStakingAddress, "topUpReward", nil, [AttachedPayment(PuzzleId, boughtPuzzle)])
 
-  let totalBoughtPuzzle = getInteger(TotalBoughtPuzzleKey).valueOrElse(0) + boughtPuzzle
-  let statsKey = makeString(["stats", i.transactionId.toBase58String(), height.toString(), lastBlock.timestamp.toString(), balance.toString(), asset], "_")
+  let totalBoughtPuzzle = this.getInteger(TotalBoughtPuzzleKey).valueOrElse(0) + boughtPuzzle
+  let statsKey = makeStatsKey(i, amount, asset)
 
   [
+    IntegerEntry(makeLastBuybackHeightKey(asset), Height),
+    IntegerEntry(makeBuybackInputKey(asset, epochHeight), epochBuybackInput),
     IntegerEntry(statsKey, boughtPuzzle),
     IntegerEntry(TotalBoughtPuzzleKey, totalBoughtPuzzle)
   ]
 }
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
