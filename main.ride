@@ -2,6 +2,7 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
+let WavesId = "WAVES"
 let MinerFee = 5
 let PayoutEmptyStatus = 0
 let PayoutInitiatedStatus = 1
@@ -9,22 +10,33 @@ let PayoutCompletedStatus = 2
 let BlocksBatchMaxSize = 10
 let RecipientsBatchMaxSize = 100
 let Height = height
-let ChainId = 87
-
 let Arr10 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-let CallerAddress = Address(base58'3PFBtsmUJSVWHUaoYMDgvLygcmczJzYQBEe')
-let WavesDaoFactoryAddress = Address(base58'3PJVm7xLPabmYohbnvdgGDYHMwnZxF2x18m')
-let SettingsAddress = Address(base58'3PFUGQBAF7w9rYLvLyNZzRSq1x6stxsmV1D')
-let PuzzleAggregatorAddress = Address(base58'3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU')
-let MaintainerAddress = Address(base58'3PN2JRxJxjjZo1YJGyQrxdhoEbijc24BMY3')
-let PuzzleBuybackAddress = Address(base58'3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS')
-
-let WavesId = "WAVES"
-
+let ConfigAddressKey = "configAddress"
 let LastPayoutKey = "lastPayout"
-
 let MassTransferFeesKey = "massTransferFees"
+
+let ChainIdKey = "chainId"
+let DaemonAddressKey = "daemonAddress"
+let DaemonPublicKeyKey = "daemonPublicKey"
+let MaintainerAddressKey = "maintainerAddress"
+let PuzzleAggregatorAddressKey = "puzzleAggregatorAddress"
+let PuzzleBuybackAddressKey = "puzzleBuybackAddress"
+let SettingsAddressKey = "settingsAddress"
+let SignerPublicKeyKey = "signerPublicKey"
+let WavesDaoFactoryAddressKey = "wavesDaoFactoryAddress"
+
+let ConfigAddress = addressFromStringValue(this.getStringValue(ConfigAddressKey))
+
+let ChainId = ConfigAddress.getIntegerValue(ChainIdKey)
+let DaemonAddress = addressFromStringValue(ConfigAddress.getStringValue(DaemonAddressKey))
+let DaemonPublicKey = ConfigAddress.getBinaryValue(DaemonPublicKeyKey)
+let MaintainerAddress = addressFromStringValue(ConfigAddress.getStringValue(MaintainerAddressKey))
+let PuzzleAggregatorAddress = addressFromStringValue(ConfigAddress.getStringValue(PuzzleAggregatorAddressKey))
+let PuzzleBuybackAddress = addressFromStringValue(ConfigAddress.getStringValue(PuzzleBuybackAddressKey))
+let SettingsAddress = addressFromStringValue(ConfigAddress.getStringValue(SettingsAddressKey))
+let SignerPublicKey = ConfigAddress.getBinary(SignerPublicKeyKey)
+let WavesDaoFactoryAddress = addressFromStringValue(ConfigAddress.getStringValue(WavesDaoFactoryAddressKey))
 
 func makePayoutDataKey(payoutId: Int) = "payoutData_" + payoutId.toString()
 
@@ -47,8 +59,17 @@ func getPayoutStatus(payoutId: Int) = getInteger(makePayoutStatusKey(payoutId)).
 func getPayoutAdditionalRewards(payoutId: Int) = getInteger(makePayoutAdditionalRewardsKey(payoutId)).valueOrElse(0)
 
 @Callable(i)
+func setup(configAddress: String) = {
+    if (i.caller != this) then throw("Access denied") else
+    if (i.payments.size() != 0) then throw("Payments are prohibited") else
+    if (addressFromString(configAddress) == unit) then throw("Invalid configAddress: " + configAddress) else
+
+    [StringEntry(ConfigAddressKey, configAddress)]
+}
+
+@Callable(i)
 func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: List[Int], assets: List[String]) = {
-    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.caller != DaemonAddress) then throw("Access denied") else
     if (i.payments.size() != 0) then throw("Payments are prohibited") else
 
     let lastPayout = getLastPayout()
@@ -88,11 +109,11 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: Li
 
         let minerFee = fraction(amount, MinerFee, 100)
         let maintainerFee = minerFee / 2
-        let puzzleTeamFee = minerFee - maintainerFee
-        let lessorsAmount = amount - maintainerFee - puzzleTeamFee
+        let puzzleBuybackFee = minerFee - maintainerFee
+        let lessorsAmount = amount - maintainerFee - puzzleBuybackFee
 
         (
-            accum._1 :+ ScriptTransfer(MaintainerAddress, maintainerFee, asset) :+ ScriptTransfer(PuzzleBuybackAddress, puzzleTeamFee, asset),
+            accum._1 :+ ScriptTransfer(MaintainerAddress, maintainerFee, asset) :+ ScriptTransfer(PuzzleBuybackAddress, puzzleBuybackFee, asset),
             accum._2 :+ lessorsAmount.toString()
         )
     }
@@ -110,7 +131,7 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: Li
 
 @Callable(i)
 func swap(payoutId: Int, swapFrom: String, amountIn: Int, route: String, minToReceive: Int) = {
-    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.caller != DaemonAddress) then throw("Access denied") else
     if (i.payments.size() != 0) then throw("Payments are prohibited") else
 
     let lastPayout = getLastPayout()
@@ -139,7 +160,7 @@ func swap(payoutId: Int, swapFrom: String, amountIn: Int, route: String, minToRe
 
 @Callable(i)
 func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List[Int], assets: List[Int], attachment: String) = {    
-    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.caller != DaemonAddress) then throw("Access denied") else
     if (i.payments.size() != 0) then throw("Payments are prohibited") else
 
     let lastPayout = getLastPayout()
@@ -192,7 +213,7 @@ func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List
 
 @Callable(i)
 func finalizePayout(payoutId: Int) = {
-    if (i.caller != CallerAddress) then throw("Access denied") else
+    if (i.caller != DaemonAddress) then throw("Access denied") else
 
     let lastPayout = getLastPayout()
     if (lastPayout != payoutId) then throw("Wrong payoutId: " + payoutId.toString() + ", should be: " + lastPayout.toString()) else
@@ -253,7 +274,32 @@ func withdrawMassTransferFees() = {
 @Verifier(tx)
 func verify () = {
     match tx {
-        case massTx: MassTransferTransaction => sigVerify_128Kb(massTx.bodyBytes, massTx.proofs[0], base58'2cbCaPrCUFJSpoBfd1vzYB6ZVGRgjRky7u7bAqf2zjgE')
-        case _ => sigVerify_128Kb(tx.bodyBytes, tx.proofs[0], base58'4eCgF1voXpsudbxN4FRQG2NCBP5QVeyJpNsfqMDQvPHh')
+        case massTx: MassTransferTransaction => {
+            let configAddressStr = this.getString(ConfigAddressKey)
+            let configAddress = addressFromStringValue(configAddressStr.value())
+            let publicKey = if (configAddressStr.isDefined())
+                then configAddress.getBinary(DaemonPublicKeyKey).valueOrElse(tx.senderPublicKey)
+                else tx.senderPublicKey
+            sigVerify_8Kb(massTx.bodyBytes, massTx.proofs[0], publicKey)
+        }
+        case invokeTx: InvokeScriptTransaction => {
+            let validFunctionName = invokeTx.function == "extendMainChain" || invokeTx.function == "appendBlock" || invokeTx.function == "startAltChain" || invokeTx.function == "extendAltChain"
+            let configAddressStr = this.getString(ConfigAddressKey)
+            let configAddress = addressFromStringValue(configAddressStr.value())
+            let unitsChainAddressStr = configAddress.getString("unitsChain_" + invokeTx.dApp.exactAs[Address].toString())
+            let signerPublicKey = configAddress.getBinary(SignerPublicKeyKey).valueOrElse(tx.senderPublicKey)
+            let publicKey = if (configAddressStr.isDefined()) 
+                then if (unitsChainAddressStr.isDefined() && validFunctionName) then tx.senderPublicKey else signerPublicKey
+                else tx.senderPublicKey
+            sigVerify_8Kb(invokeTx.bodyBytes, invokeTx.proofs[0], publicKey)
+        }
+        case _ => {
+            let configAddressStr = this.getString(ConfigAddressKey)
+            let configAddress = addressFromStringValue(configAddressStr.value())
+            let publicKey = if (configAddressStr.isDefined())
+                then configAddress.getBinary(SignerPublicKeyKey).valueOrElse(tx.senderPublicKey)
+                else tx.senderPublicKey
+            sigVerify_128Kb(tx.bodyBytes, tx.proofs[0], publicKey)
+        }
     }
 }

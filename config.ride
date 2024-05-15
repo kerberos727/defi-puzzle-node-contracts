@@ -1,0 +1,54 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+@Callable(i)
+func setAddress(key: String, address: String) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (addressFromString(address) == unit) then throw("Invalid address: " + address) else
+
+  [StringEntry(key, address)]
+}
+
+@Callable(i)
+func setAssetId(key: String, assetId: String) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let id = fromBase58String(assetId)
+  if (assetInfo(id) == unit) then throw("Unknown assetId: " + assetId) else
+
+  [BinaryEntry(key, id)]
+}
+
+@Callable(i)
+func setChainId(chainId: Int) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (chainId <= 0) then throw("chainId should be positive: " + chainId.toString()) else
+
+  [IntegerEntry("chainId", chainId)]
+}
+
+@Callable(i)
+func setPublicKey(key: String, publicKey: String) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  let pubKey = fromBase58String(publicKey)
+  strict validation = addressFromPublicKey(pubKey)
+
+  [BinaryEntry(key, pubKey)]
+}
+
+@Callable(i)
+func setUnitsContract(address: String) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+  if (addressFromString(address) == unit) then throw("Invalid address: " + address) else
+
+  [StringEntry("unitsChain_" + address, address)]
+}
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
