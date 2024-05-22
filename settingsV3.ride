@@ -1,0 +1,97 @@
+{-# STDLIB_VERSION 6 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+
+let WavesId = "WAVES"
+let Arr10 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+let ConfigAddressKey = "configAddress"
+
+let InputsQuantityKey = "inputsQuantity"
+
+let ConfigAddress = addressFromStringValue(this.getStringValue(ConfigAddressKey))
+
+let InputsQuantity = ConfigAddress.getIntegerValue(InputsQuantityKey)
+
+func makeAssetOperationKey(chain: String, asset: String, operation: String) = makeString(["assetOperation", chain, asset, operation], "_") 
+
+func makeChainIdKey(chain: String) = "chainId_" + chain
+
+func makeBlacklistedDelegateKey(delegate: String) = "blacklistedDelegate_" + delegate
+
+func makeInputAssetIndexKey(chain: String, asset: String) = makeString([ "inputAssetIndex", chain, asset], "_")
+
+func getChainId(chain: String) = ConfigAddress.getInteger(makeChainIdKey(chain))
+
+func getBlacklistedDelegate(delegate: String) = ConfigAddress.getBoolean(makeBlacklistedDelegateKey(delegate))
+
+func getInputAssetIndex(chain: String, asset: String) = ConfigAddress.getIntegerValue(makeInputAssetIndexKey(chain, asset))
+
+func getAssetOperation(chain: String, asset: String, operation: String) = ConfigAddress.getInteger(makeAssetOperationKey(chain, asset, operation))
+
+@Callable(i)
+func setup(configAddress: String) = {
+  if (i.caller != this) then throw("Access denied") else
+  if (i.payments.size() != 0) then throw("Payments are prohibited") else
+  if (addressFromString(configAddress) == unit) then throw("Invalid configAddress: " + configAddress) else
+
+  [StringEntry(ConfigAddressKey, configAddress)]
+}
+
+@Callable(i)
+func applySettings(
+  inputChains: List[String],
+  inputAssets: List[String],
+  outputChains: List[String],
+  outputAssets: List[String],
+  assetOperations: List[String],
+  delegates: List[String]) = {
+  if (i.payments.size() != 0) then throw("Payments are prohibited") else
+  if (i.caller == this) then throw("Self call is prohibited") else
+
+  let callerAddressStr = i.caller.toString()
+  let inputChainsSize = inputChains.size()
+  let inputAssetsSize = inputAssets.size()
+  let outputChainsSize = outputChains.size()
+  let outputAssetsSize = outputAssets.size()
+  let assetOperationsSize = assetOperations.size()
+  let delegatesSize = delegates.size()
+
+  if (InputsQuantity != inputChainsSize || inputChainsSize != inputAssetsSize ||
+      inputAssetsSize != outputChainsSize || outputChainsSize != outputAssetsSize ||
+      outputAssetsSize != assetOperationsSize || assetOperationsSize != delegatesSize)
+  then throw("Mismatch argument sizes") else
+
+  func settingsFold(accum: List[StringEntry|IntegerEntry|BinaryEntry], index: Int) = {
+    if (index >= InputsQuantity) then accum else
+
+    let inputChain = inputChains[index]
+    if (getChainId(inputChain) == unit) then throw("Invalid chain: " + inputChain) else
+
+    let inputAsset = inputAssets[index]
+    if (getInputAssetIndex(inputChain, inputAsset) != index) then throw("Invalid inputAsset: " + inputChain + "," + inputAsset) else
+
+    let outputChain = outputChains[index]
+    if (getChainId(outputChain) == unit) then throw("Invalid chain: " + outputChain) else
+
+    let outputAsset = outputAssets[index]
+    let operation = assetOperations[index]
+    if (getAssetOperation(outputChain, outputAsset, operation) == unit) then throw("Invalid arguments: " + outputChain + "," + outputAsset + "," + operation) else
+
+    let delegate = delegates[index]
+    if (getBlacklistedDelegate(delegate) != unit) then throw("Prohibited delegate: " + delegate) else
+    let isValidWavesAddress = addressFromString(delegate) != unit
+    let isValidEthAddress = delegate.take(2) == "0x" && fromBase16String(delegate.drop(2)).size() == 20
+    if (!(outputChain == WavesId && isValidWavesAddress || outputChain != WavesId && isValidEthAddress)) then throw("Invalid delegate: " + delegate) else
+
+    let settingsKey = makeString(["settings", callerAddressStr, inputChain, inputAsset], "_")
+    let settingsValue = makeString([outputChain, outputAsset, operation, delegate], "_")
+
+    accum :+ StringEntry(settingsKey, settingsValue)
+  }
+
+  FOLD<10>(Arr10, [], settingsFold)
+}
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)

@@ -16,7 +16,7 @@ let ConfigAddressKey = "configAddress"
 let LastPayoutKey = "lastPayout"
 let MassTransferFeesKey = "massTransferFees"
 
-let ChainIdKey = "chainId"
+let WavesChainIdKey = "chainId_" + WavesId
 let DaemonAddressKey = "daemonAddress"
 let DaemonPublicKeyKey = "daemonPublicKey"
 let MaintainerAddressKey = "maintainerAddress"
@@ -28,13 +28,12 @@ let WavesDaoFactoryAddressKey = "wavesDaoFactoryAddress"
 
 let ConfigAddress = addressFromStringValue(this.getStringValue(ConfigAddressKey))
 
-let ChainId = ConfigAddress.getIntegerValue(ChainIdKey)
+let WavesChainId = ConfigAddress.getIntegerValue(WavesChainIdKey)
 let DaemonAddress = addressFromStringValue(ConfigAddress.getStringValue(DaemonAddressKey))
 let DaemonPublicKey = ConfigAddress.getBinaryValue(DaemonPublicKeyKey)
 let MaintainerAddress = addressFromStringValue(ConfigAddress.getStringValue(MaintainerAddressKey))
 let PuzzleAggregatorAddress = addressFromStringValue(ConfigAddress.getStringValue(PuzzleAggregatorAddressKey))
 let PuzzleBuybackAddress = addressFromStringValue(ConfigAddress.getStringValue(PuzzleBuybackAddressKey))
-let SettingsAddress = addressFromStringValue(ConfigAddress.getStringValue(SettingsAddressKey))
 let SignerPublicKey = ConfigAddress.getBinary(SignerPublicKeyKey)
 let WavesDaoFactoryAddress = addressFromStringValue(ConfigAddress.getStringValue(WavesDaoFactoryAddressKey))
 
@@ -82,10 +81,9 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: Li
     if (startHeight != lastEndHeight + 1) then throw("Wrong startHeight: " + startHeight.toString() + ", should be: " + (lastEndHeight + 1).toString()) else
     if (endHeight < startHeight) then throw("endHeight: " + endHeight.toString() + " less than startHeight: " + startHeight.toString()) else
 
-    let inputsQuantity = SettingsAddress.getIntegerValue("inputsQuantity")
     let amountsSize = amounts.size()
     let assetsSize = assets.size()
-    if (amountsSize != assetsSize || amountsSize != inputsQuantity) then throw("Wrong size of amounts or assets") else
+    if (amountsSize != assetsSize) then throw("Wrong size of amounts or assets") else
 
     let availableWavesDaoLpToClaim = WavesDaoFactoryAddress.getInteger("%s%s__available__" + this.toString()).valueOrElse(0)
     let wavesDaoNextBlockToProcess = WavesDaoFactoryAddress.getIntegerValue("%s__nextBlockToProcess")
@@ -99,7 +97,7 @@ func initiatePayout(payoutId: Int, startHeight: Int, endHeight: Int, amounts: Li
         if (index >= assetsSize) then accum else
 
         let assetStr = assets[index]
-        if (SettingsAddress.getInteger("inputAssetIndex_" + assetStr) == unit) then throw("Unknown input: " + assetStr) else
+        if (ConfigAddress.getInteger("assetIndex_" + assetStr) == unit) then throw("Unknown asset: " + assetStr) else
 
         let (asset, amount) = if (assetStr == WavesId) 
             then (unit, amounts[index] + currentAdditionalRewards) 
@@ -177,7 +175,7 @@ func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List
     if (recipientsSize > RecipientsBatchMaxSize) then throw("Should be not greater than " + RecipientsBatchMaxSize.toString() + " recipients, current: " + recipientsSize.toString()) else
 
     let magicByte = 1.toBytes().drop(7)
-    let chainIdByte = ChainId.toBytes().drop(7)
+    let chainIdByte = WavesChainId.toBytes().drop(7)
     let addressPrefix = magicByte + chainIdByte
 
     func scriptTransfersFold(accum: List[ScriptTransfer], index: Int) = {
@@ -190,7 +188,7 @@ func distributeTokens(payoutId: Int, recipients: List[ByteVector], amounts: List
 
         let amount = amounts[index]
         let assetIndex = assets[index]
-        let assetId = SettingsAddress.getBinaryValue("assetId_" + assetIndex.toString())
+        let assetId = ConfigAddress.getBinaryValue("assetId_" + assetIndex.toString())
         let asset = if (assetId == base58'') then unit else assetId
         accum :+ ScriptTransfer(recipient, amount, asset)
     }
@@ -286,10 +284,10 @@ func verify () = {
             let validFunctionName = invokeTx.function == "extendMainChain" || invokeTx.function == "appendBlock" || invokeTx.function == "startAltChain" || invokeTx.function == "extendAltChain"
             let configAddressStr = this.getString(ConfigAddressKey)
             let configAddress = addressFromStringValue(configAddressStr.value())
-            let unitsChainAddressStr = configAddress.getString("unitsChain_" + invokeTx.dApp.exactAs[Address].toString())
+            let unitsChain = configAddress.getString("unitsChainName_" + invokeTx.dApp.exactAs[Address].toString())
             let signerPublicKey = configAddress.getBinary(SignerPublicKeyKey).valueOrElse(tx.senderPublicKey)
             let publicKey = if (configAddressStr.isDefined()) 
-                then if (unitsChainAddressStr.isDefined() && validFunctionName) then tx.senderPublicKey else signerPublicKey
+                then if (unitsChain.isDefined() && validFunctionName) then tx.senderPublicKey else signerPublicKey
                 else tx.senderPublicKey
             sigVerify_8Kb(invokeTx.bodyBytes, invokeTx.proofs[0], publicKey)
         }

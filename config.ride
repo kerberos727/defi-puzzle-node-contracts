@@ -2,6 +2,35 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
+let WavesId = "WAVES"
+let Arr10 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+let AssetsQuantityKey = "assetsQuantity"
+let AssetOperationsQuantityKey = "assetOperationsQuantity"
+let InputsQuantityKey = "inputsQuantity"
+
+let AssetsQuantity = this.getInteger(AssetsQuantityKey).valueOrElse(0)
+let AssetOperationsQuantity = this.getInteger(AssetOperationsQuantityKey).valueOrElse(0)
+let InputsQuantity = this.getInteger(InputsQuantityKey).valueOrElse(0)
+
+func makeAssetIndexKey(asset: String) = "assetIndex_" + asset
+
+func makeAssetIdKey(assetIndex: Int) = "assetId_" + assetIndex.toString()
+
+func makeAssetOperationKey(chain: String, asset: String, operation: String) = makeString(["assetOperation", chain, asset, operation], "_") 
+
+func makeChainIdKey(chain: String) = "chainId_" + chain
+
+func makeBlacklistedDelegateKey(delegate: String) = "blacklistedDelegate_" + delegate
+
+func makeInputAssetIndexKey(chain: String, asset: String) = makeString([ "inputAssetIndex", chain, asset], "_")
+
+func makeUnitsChainContractKey(name: String) = "unitsChainContract_" + name
+
+func makeUnitsChainNameKey(address: String) = "unitsChainName_" + address
+
+func getChainId(chain: String) = this.getInteger(makeChainIdKey(chain))
+
 @Callable(i)
 func setAddress(key: String, address: String) = {
   if (i.caller != this) then throw("Only self call is allowed") else
@@ -23,12 +52,113 @@ func setAssetId(key: String, assetId: String) = {
 }
 
 @Callable(i)
-func setChainId(chainId: Int) = {
+func setAssetIndexes(assets: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let assetsSize = assets.size()
+
+  func assetsFold(accum: List[IntegerEntry|BinaryEntry], index: Int) = {
+    if (index >= assetsSize) then accum else
+
+    let asset = assets[index]
+    let assetIndexKey = makeAssetIndexKey(asset)
+    if (this.getInteger(assetIndexKey) != unit) then throw("Already exists: " + asset) else
+
+    let assetId = if (asset == WavesId) then base58'' else assetInfo(fromBase58String(asset)).value().id
+    let assetIndex = AssetsQuantity + index
+    accum :+ BinaryEntry(makeAssetIdKey(assetIndex), assetId) :+ IntegerEntry(assetIndexKey, assetIndex)
+  }
+
+  FOLD<10>(Arr10, [], assetsFold) :+ IntegerEntry(AssetsQuantityKey, AssetsQuantity + assetsSize)
+}
+
+@Callable(i)
+func setAssetOperations(chains: List[String], assets: List[String], operations: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let chainsSize = chains.size()
+  let assetsSize = assets.size()
+  let operationsSize = operations.size()
+  if (chainsSize != assetsSize || assetsSize != operationsSize) then throw("Mismatch argument sizes") else
+  
+  func operationsFold(accum: List[IntegerEntry], index: Int) = {
+    if (index >= operationsSize) then accum else
+
+    let chain = chains[index]
+    if (getChainId(chain) == unit) then throw("Invalid chain: " + chain) else
+
+    let asset = assets[index]
+    let operation = operations[index]
+    let assetOperationKey = makeAssetOperationKey(chain, asset, operation)
+
+    if (this.getInteger(assetOperationKey) != unit) then throw("Already exists: " + chain + "," + asset + "," + operation) else
+
+    accum :+ IntegerEntry(assetOperationKey, AssetOperationsQuantity + index)
+  }
+
+  FOLD<10>(Arr10, [], operationsFold) :+ IntegerEntry(AssetOperationsQuantityKey, AssetOperationsQuantity + operationsSize)
+}
+
+@Callable(i)
+func setBlacklistedDelegates(delegates: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let delegatesSize = delegates.size()
+
+  func delegatesFold(accum: List[BooleanEntry], index: Int) = {
+    if (index >= delegatesSize) then accum else
+
+    let delegate = delegates[index]
+    let isValidWavesAddress = addressFromString(delegate) != unit
+    let isValidEthAddress = delegate.take(2) == "0x" && fromBase16String(delegate.drop(2)).size() == 20
+    if (!(isValidWavesAddress || isValidEthAddress)) then throw("Invalid delegate: " + delegate) else
+
+    let blacklistedDelegateKey = makeBlacklistedDelegateKey(delegate)
+
+    if (this.getBoolean(blacklistedDelegateKey) != unit) then throw("Already exists: " + delegate) else
+
+    accum :+ BooleanEntry(blacklistedDelegateKey, true)
+  }
+
+  FOLD<10>(Arr10, [], delegatesFold)
+}
+
+@Callable(i)
+func setChainId(chainName: String, chainId: Int) = {
   if (i.caller != this) then throw("Only self call is allowed") else
   if (i.payments.size() > 0) then throw("Payments are prohibited") else
   if (chainId <= 0) then throw("chainId should be positive: " + chainId.toString()) else
 
-  [IntegerEntry("chainId", chainId)]
+  [IntegerEntry(makeChainIdKey(chainName), chainId)]
+}
+
+@Callable(i)
+func setInputAssets(chains: List[String], assets: List[String]) = {
+  if (i.caller != this) then throw("Only self call is allowed") else
+  if (i.payments.size() > 0) then throw("Payments are prohibited") else
+
+  let chainsSize = chains.size()
+  let assetsSize = assets.size()
+  if (chainsSize != assetsSize) then throw("Mismatch argument sizes") else
+
+  func inputsFold(accum: List[IntegerEntry], index: Int) = {
+    if (index >= assetsSize) then accum else
+
+    let chain = chains[index]
+    if (getChainId(chain) == unit) then throw("Invalid chain: " + chain) else
+
+    let asset = assets[index]
+    let inputAssetKey = makeInputAssetIndexKey(chain, asset)
+
+    if (this.getInteger(inputAssetKey) != unit) then throw("Already exists: " + asset) else
+
+    accum :+ IntegerEntry(inputAssetKey, InputsQuantity + index)
+  }
+
+  FOLD<10>(Arr10, [], inputsFold) :+ IntegerEntry(InputsQuantityKey, InputsQuantity + assetsSize)
 }
 
 @Callable(i)
@@ -42,12 +172,16 @@ func setPublicKey(key: String, publicKey: String) = {
 }
 
 @Callable(i)
-func setUnitsContract(address: String) = {
+func setUnitsContract(address: String, name: String) = {
   if (i.caller != this) then throw("Only self call is allowed") else
   if (i.payments.size() > 0) then throw("Payments are prohibited") else
   if (addressFromString(address) == unit) then throw("Invalid address: " + address) else
+  if (getChainId(name) == unit) then throw("Invalid chain: " + name) else
 
-  [StringEntry("unitsChain_" + address, address)]
+  [
+    StringEntry(makeUnitsChainContractKey(name), address),
+    StringEntry(makeUnitsChainNameKey(address), name)
+  ]
 }
 
 @Verifier(tx)

@@ -5,7 +5,8 @@
 | Address       | Mainnet                             | Testnet                             |
 |---------------|-------------------------------------|-------------------------------------|
 | Main          | 3PCrRrwHEjGXFjYtXDsNv78f3Ch3CH3p6V1 | 3N7XWpdx1UJKZp5stTtFMXPEygyfZ7j4PyC |
-| Settings      | 3PFUGQBAF7w9rYLvLyNZzRSq1x6stxsmV1D | 3N2jcP6cAcDJoVpfsQ5tVDTQrNgJcVUjj4v |
+| Settings      | 3P8HLW1U3gxrg2NjrTk4dhXrNML7mvtmmW3 | 3MpePmToiGHKkuV2XpBzk7RmubYDV4bJbpX |
+| Config        | 3PMYNkURaBfRGLch8NjXphzcuNkaYHNaEkL | 3N6D8m1NDJbddFcWkTQ1jtENG375YayszPV |
 | PuzzleBuyback | 3PFxoYQ6ZFp8sLkrbeJEyaFFyKpHifV2jRS | 3MyUDpTMG43mkmScfDKgG9gep4reUboH9YF |
 
 ## Puzzle swap
